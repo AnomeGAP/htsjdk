@@ -28,3 +28,6 @@ Java SE Major Release | End of Java SE Oracle Public Updates | Proposed End of S
 [1]: http://samtools.sourceforge.net
 [2]: http://vcftools.sourceforge.net/specs.html
 
+#### Change Log
+14 Feb 2016
+- Fixed string to double parsing error (parseDeprecatedGLString@GenotypeLikelihoods).
