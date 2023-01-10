@@ -38,6 +38,7 @@ import java.util.function.Supplier;
  */
 public class SAMFileHeader extends AbstractSAMHeaderRecord implements HtsHeader
 {
+    private static final long serialVersionUID = -8027837245758418893L;
     public static final String VERSION_TAG = "VN";
     public static final String SORT_ORDER_TAG = "SO";
     public static final String GROUP_ORDER_TAG = "GO";

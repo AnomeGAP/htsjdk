@@ -53,8 +53,8 @@ dependencies {
 sourceCompatibility = 1.8
 targetCompatibility = 1.8
 
-final isRelease = Boolean.getBoolean("release")
-final gitVersion = gitVersion().replaceAll(".dirty", "")
+final isRelease = true
+final gitVersion = 'atgx-3.0.4'
 version = isRelease ? gitVersion : gitVersion + "-SNAPSHOT"
 
 logger.info("build for version:" + version)
@@ -224,11 +224,11 @@ publishing {
     repositories {
         maven {
             credentials {
-                username = isRelease ? project.findProperty("sonatypeUsername") : System.env.ARTIFACTORY_USERNAME
-                password = isRelease ? project.findProperty("sonatypePassword") : System.env.ARTIFACTORY_PASSWORD
+                username = 'admin'
+                password = 'Bowtie288'
             }
-            def release = "https://oss.sonatype.org/service/local/staging/deploy/maven2/"
-            def snapshot = "https://broadinstitute.jfrog.io/broadinstitute/libs-snapshot-local/"
+            def release = "https://nexus-atgx.azurewebsites.net/repository/maven-releases/"
+            def snapshot = "https://nexus-atgx.azurewebsites.net/repository/maven-snapshots/"
             url = isRelease ? release : snapshot
         }
     }

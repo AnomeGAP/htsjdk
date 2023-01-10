@@ -38,6 +38,7 @@ import java.util.Map;
  */
 public class VCFSimpleHeaderLine extends VCFHeaderLine implements VCFIDHeaderLine {
 
+    private static final long serialVersionUID = 7844441626219014281L;
     private String name;
     private Map<String, String> genericFields = new LinkedHashMap<String, String>();
 
