@@ -2,6 +2,8 @@ package htsjdk.samtools.cram.compression;
 
 import htsjdk.HtsjdkTest;
 import htsjdk.samtools.Defaults;
+import htsjdk.samtools.cram.compression.range.RangeExternalCompressor;
+import htsjdk.samtools.cram.compression.range.RangeParams;
 import htsjdk.samtools.cram.structure.block.BlockCompressionMethod;
 import org.testng.Assert;
 import org.testng.annotations.DataProvider;
@@ -26,9 +28,26 @@ public class ExternalCompressionTest extends HtsjdkTest {
                 {BlockCompressionMethod.GZIP, Deflater.BEST_COMPRESSION, GZIPExternalCompressor.class},
                 {BlockCompressionMethod.BZIP2, ExternalCompressor.NO_COMPRESSION_ARG, BZIP2ExternalCompressor.class},
                 {BlockCompressionMethod.LZMA, ExternalCompressor.NO_COMPRESSION_ARG, LZMAExternalCompressor.class},
-                {BlockCompressionMethod.RANS, 1, RANSExternalCompressor.class},
-                {BlockCompressionMethod.RANS, 0, RANSExternalCompressor.class},
-                {BlockCompressionMethod.RANS, ExternalCompressor.NO_COMPRESSION_ARG, RANSExternalCompressor.class},
+                {BlockCompressionMethod.RANS, 1, RANS4x8ExternalCompressor.class},
+                {BlockCompressionMethod.RANS, 0, RANS4x8ExternalCompressor.class},
+                {BlockCompressionMethod.RANS, ExternalCompressor.NO_COMPRESSION_ARG, RANS4x8ExternalCompressor.class},
+                {BlockCompressionMethod.RANSNx16, ExternalCompressor.NO_COMPRESSION_ARG, RANSNx16ExternalCompressor.class},
+                {BlockCompressionMethod.RANSNx16, 1, RANSNx16ExternalCompressor.class},
+                {BlockCompressionMethod.RANSNx16, 0, RANSNx16ExternalCompressor.class},
+                {BlockCompressionMethod.ADAPTIVE_ARITHMETIC, 1, RangeExternalCompressor.class},
+                {BlockCompressionMethod.ADAPTIVE_ARITHMETIC, 0x00, RangeExternalCompressor.class},
+                {BlockCompressionMethod.ADAPTIVE_ARITHMETIC, RangeParams.ORDER_FLAG_MASK, RangeExternalCompressor.class},
+                {BlockCompressionMethod.ADAPTIVE_ARITHMETIC, RangeParams.RLE_FLAG_MASK, RangeExternalCompressor.class},
+                {BlockCompressionMethod.ADAPTIVE_ARITHMETIC, RangeParams.RLE_FLAG_MASK | RangeParams.ORDER_FLAG_MASK, RangeExternalCompressor.class},
+                {BlockCompressionMethod.ADAPTIVE_ARITHMETIC, RangeParams.CAT_FLAG_MASK, RangeExternalCompressor.class},
+                {BlockCompressionMethod.ADAPTIVE_ARITHMETIC, RangeParams.CAT_FLAG_MASK | RangeParams.ORDER_FLAG_MASK, RangeExternalCompressor.class},
+                {BlockCompressionMethod.ADAPTIVE_ARITHMETIC, RangeParams.PACK_FLAG_MASK, RangeExternalCompressor.class},
+                {BlockCompressionMethod.ADAPTIVE_ARITHMETIC, RangeParams.PACK_FLAG_MASK | RangeParams. ORDER_FLAG_MASK, RangeExternalCompressor.class},
+                {BlockCompressionMethod.ADAPTIVE_ARITHMETIC, RangeParams.PACK_FLAG_MASK | RangeParams.RLE_FLAG_MASK, RangeExternalCompressor.class},
+                {BlockCompressionMethod.ADAPTIVE_ARITHMETIC, RangeParams.PACK_FLAG_MASK | RangeParams.RLE_FLAG_MASK | RangeParams.ORDER_FLAG_MASK, RangeExternalCompressor.class},
+                {BlockCompressionMethod.ADAPTIVE_ARITHMETIC, RangeParams.EXT_FLAG_MASK, RangeExternalCompressor.class},
+                {BlockCompressionMethod.ADAPTIVE_ARITHMETIC, RangeParams.EXT_FLAG_MASK | RangeParams.PACK_FLAG_MASK, RangeExternalCompressor.class},
+                {BlockCompressionMethod.ADAPTIVE_ARITHMETIC, ExternalCompressor.NO_COMPRESSION_ARG, RangeExternalCompressor.class},
         };
     }
 
@@ -69,7 +88,7 @@ public class ExternalCompressionTest extends HtsjdkTest {
             final int compressorSpecificArg,
             final Class<ExternalCompressor> unused) {
         final ExternalCompressor compressor = ExternalCompressor.getCompressorForMethod(method, compressorSpecificArg);
-        final byte [] compressed = compressor.compress(TEST_BYTES);
+        final byte [] compressed = compressor.compress(TEST_BYTES, null);
         final byte [] restored = compressor.uncompress(compressed);
         Assert.assertEquals(TEST_BYTES, restored);
     }

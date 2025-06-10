@@ -26,8 +26,10 @@ import htsjdk.variant.vcf.AbstractVCFCodec;
 import htsjdk.variant.vcf.VCFHeader;
 
 import java.io.IOException;
+import java.nio.channels.SeekableByteChannel;
 import java.util.List;
 import java.util.Optional;
+import java.util.function.Function;
 
 /**
  * InternalAPII
@@ -63,7 +65,7 @@ public abstract class VCFDecoder implements VariantsDecoder {
 
         this.inputBundle = inputBundle;
         this.variantsDecoderOptions = variantsDecoderOptions;
-        this.displayName = inputBundle.getOrThrow(BundleResourceType.VARIANT_CONTEXTS).getDisplayName();
+        this.displayName = inputBundle.getOrThrow(BundleResourceType.CT_VARIANT_CONTEXTS).getDisplayName();
         vcfReader = getVCFReader(inputBundle, vcfCodec, variantsDecoderOptions);
         vcfHeader = (VCFHeader) vcfReader.getHeader();
     }
@@ -191,13 +193,13 @@ public abstract class VCFDecoder implements VariantsDecoder {
             final Bundle inputBundle,
             final AbstractVCFCodec vcfCodec,
             final VariantsDecoderOptions decoderOptions) {
-        final BundleResource variantsResource = inputBundle.getOrThrow(BundleResourceType.VARIANT_CONTEXTS);
+        final BundleResource variantsResource = inputBundle.getOrThrow(BundleResourceType.CT_VARIANT_CONTEXTS);
         if (!variantsResource.hasInputType()) {
             throw new IllegalArgumentException(String.format(
                     "The provided %s resource (%s) must be a readable/input resource",
-                    BundleResourceType.VARIANT_CONTEXTS,
+                    BundleResourceType.CT_VARIANT_CONTEXTS,
                     variantsResource));
-        } else if (!variantsResource.getIOPath().isPresent()) {
+        } else if (variantsResource.getIOPath().isEmpty()) {
             throw new HtsjdkUnsupportedOperationException("VCF reader from stream not implemented");
         }
         final IOPath variantsIOPath = variantsResource.getIOPath().get();
@@ -206,35 +208,29 @@ public abstract class VCFDecoder implements VariantsDecoder {
         //TODO: this resolves the index automatically. it should check to make sure the provided index
         // matches the one that is automatically resolved, otherwise throw since the request will not be honored
         return AbstractFeatureReader.getFeatureReader(
-                variantsIOPath.toPath().toString(),
-                indexIOPath.isPresent() ?
-                        indexIOPath.get().toPath().toString() :
-                        null,
+                variantsIOPath.getURIString(),
+                indexIOPath.map(IOPath::getURIString).orElse(null),
                 vcfCodec,
                 indexIOPath.isPresent(),
-                decoderOptions.getVariantsChannelTransformer().isPresent() ?
-                        decoderOptions.getVariantsChannelTransformer().get() :
-                        null,
-                decoderOptions.getIndexChannelTransformer().isPresent() ?
-                        decoderOptions.getIndexChannelTransformer().get() :
-                        null
+                decoderOptions.getVariantsChannelTransformer().orElse(null),
+                decoderOptions.getIndexChannelTransformer().orElse(null)
         );
     }
 
     // the underlying readers can't handle index streams, so  for now we can only handle IOPaths
     private static Optional<IOPath> getIndexIOPath(final Bundle inputBundle) {
-        final Optional<BundleResource> optIndexResource = inputBundle.get(BundleResourceType.VARIANTS_INDEX);
-        if (!optIndexResource.isPresent()) {
+        final Optional<BundleResource> optIndexResource = inputBundle.get(BundleResourceType.CT_VARIANTS_INDEX);
+        if (optIndexResource.isEmpty()) {
             return Optional.empty();
         }
         final BundleResource indexResource = optIndexResource.get();
         if (!indexResource.hasInputType()) {
             throw new IllegalArgumentException(String.format(
                 "The provided %s index resource (%s) must be a readable/input resource",
-                BundleResourceType.VARIANTS_INDEX,
+                BundleResourceType.CT_VARIANTS_INDEX,
                indexResource));
         }
-        if (!indexResource.getIOPath().isPresent()) {
+        if (indexResource.getIOPath().isEmpty()) {
             throw new HtsjdkUnsupportedOperationException("Reading a VCF index from a stream not implemented");
         }
         return indexResource.getIOPath();

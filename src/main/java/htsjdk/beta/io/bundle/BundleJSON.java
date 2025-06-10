@@ -4,11 +4,12 @@ import htsjdk.io.HtsPath;
 import htsjdk.io.IOPath;
 import htsjdk.samtools.util.Log;
 import htsjdk.utils.ValidationUtils;
-import mjson.Json;
+import org.json.JSONArray;
+import org.json.JSONException;
+import org.json.JSONObject;
 
 import java.util.ArrayList;
-import java.util.Collections;
-import java.util.HashSet;
+import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
@@ -24,25 +25,20 @@ public class BundleJSON {
     public static final String BUNDLE_EXTENSION = ".json";
     private static final Log LOG = Log.getInstance(BundleJSON.class);
 
+    public static final String JSON_PROPERTY_SCHEMA           = "schema";
     public static final String JSON_PROPERTY_SCHEMA_NAME      = "schemaName";
     public static final String JSON_PROPERTY_SCHEMA_VERSION   = "schemaVersion";
     public static final String JSON_PROPERTY_PRIMARY          = "primary";
     public static final String JSON_PROPERTY_PATH             = "path";
     public static final String JSON_PROPERTY_FORMAT           = "format";
+
     public static final String JSON_SCHEMA_NAME               = "htsbundle";
     public static final String JSON_SCHEMA_VERSION            = "0.1.0"; // TODO: bump this to 1.0.0
 
-    final private static Set<String> TOP_LEVEL_PROPERTIES = Collections.unmodifiableSet(
-            new HashSet<String>() {
-                private static final long serialVersionUID = 1L;
-                {
-                    add(JSON_PROPERTY_SCHEMA_NAME);
-                    add(JSON_PROPERTY_SCHEMA_VERSION);
-                    add(JSON_PROPERTY_PRIMARY);
-                }});
+    final private static Set<String> TOP_LEVEL_PROPERTIES = Set.of(JSON_PROPERTY_SCHEMA, JSON_PROPERTY_PRIMARY);
 
     /**
-     * Serialize this bundle to a JSON string representation. All resources in the bundle must
+     * Serialize a bundle to a JSON string representation. All resources in the bundle must
      * be {@link IOPathResource}s for serialization to succeed. Stream resources cannot be serialized.
      *
      * @param bundle the {@link Bundle} to serialize to JSON
@@ -50,10 +46,15 @@ public class BundleJSON {
      * @throws IllegalArgumentException if any resource in bundle is not an IOPathResources.
      */
     public static String toJSON(final Bundle bundle) {
-        final Json outerJSON = Json.object()
-                .set(JSON_PROPERTY_SCHEMA_NAME, JSON_SCHEMA_NAME)
-                .set(JSON_PROPERTY_SCHEMA_VERSION, JSON_SCHEMA_VERSION)
-                .set(JSON_PROPERTY_PRIMARY, bundle.getPrimaryContentType());
+        ValidationUtils.validateArg(
+                !bundle.getPrimaryContentType().equals(JSON_PROPERTY_PRIMARY),
+                "Primary content type cannot be named 'primary'");
+        final JSONObject schemaMap = new JSONObject()
+                .put(JSON_PROPERTY_SCHEMA_NAME, JSON_SCHEMA_NAME)
+                .put(JSON_PROPERTY_SCHEMA_VERSION, JSON_SCHEMA_VERSION);
+        final JSONObject outerJSON = new JSONObject()
+            .put(JSON_PROPERTY_SCHEMA, schemaMap)
+            .put(JSON_PROPERTY_PRIMARY, bundle.getPrimaryContentType());
 
         bundle.forEach(bundleResource -> {
             final Optional<IOPath> resourcePath = bundleResource.getIOPath();
@@ -62,154 +63,196 @@ public class BundleJSON {
             }
 
             // generate JSON for each bundle resource
-            final Json resourceJSON = Json.object().set(JSON_PROPERTY_PATH, resourcePath.get().getURIString());
+            final JSONObject resourceJSON = new JSONObject().put(JSON_PROPERTY_PATH, resourcePath.get().getURIString());
             if (bundleResource.getFileFormat().isPresent()) {
-                resourceJSON.set(JSON_PROPERTY_FORMAT, bundleResource.getFileFormat().get());
+                resourceJSON.put(JSON_PROPERTY_FORMAT, bundleResource.getFileFormat().get());
             }
-            outerJSON.set(bundleResource.getContentType(), resourceJSON);
+            outerJSON.put(bundleResource.getContentType(), resourceJSON);
         });
 
-        return prettyPrintJSON(outerJSON);
+        return outerJSON.toString(1);
     }
 
     /**
-     * Create a Bundle from jsonString.
-     *
-     * @param jsonString a valid JSON string conforming to the bundle schema
-     * @return a {@link Bundle} created from jsonString
+     * Convert a (non-empty) List of Bundles to a JSON array string representation.
+     * @param bundles a List of Bundles to serialize to JSON
+     * @return a JSON string (array) representation of the list of bundles
+     * @throw IllegalArgumentException if the list is empty
      */
-    public static Bundle toBundle(final String jsonString) {
-        return toBundle(ValidationUtils.nonEmpty(jsonString, "resource list"), HtsPath::new);
+    public static String toJSON(final List<Bundle> bundles) {
+        if (bundles.isEmpty()) {
+            throw new IllegalArgumentException("A bundle list must contain at least one bundle");
+        }
+        return bundles.stream()
+                .map(BundleJSON::toJSON)
+                .collect(Collectors.joining(",\n", "[", "]"));
     }
+
+     /**
+      * Create a Bundle from a jsonString.
+      *
+      * @param jsonString a valid JSON string conforming to the bundle schema (for compatibility, a bundle list is also
+      *                   accepted, as long as it only contains a single bundle)
+      * @return a {@link Bundle} created from jsonString
+      */
+     public static Bundle toBundle(final String jsonString) {
+        return toBundle(ValidationUtils.nonEmpty(jsonString, "resource list"), HtsPath::new);
+     }
 
     /**
      * Create a Bundle from jsonString using a custom class that implements {@link IOPath} for all resources.
+     * (For compatibility, a bundle list string is also accepted, as long as it only contains a single bundle).
      *
      * @param jsonString a valid JSON string conforming to the bundle schema
      * @param ioPathConstructor a function that takes a string and returns an IOPath-derived class of type <T>
      * @param <T> the IOPath-derived type to use for IOPathResources
-     * @return  a newly created {@link Bundle}
+     * @return a newly created {@link Bundle}
      */
     public static <T extends IOPath> Bundle toBundle(
             final String jsonString,
             final Function<String, T> ioPathConstructor) {
         ValidationUtils.nonEmpty(jsonString, "JSON string");
         ValidationUtils.nonNull(ioPathConstructor, "IOPath-derived class constructor");
-
-        final List<BundleResource> resources  = new ArrayList<>();
-        String primaryContentType;
-
         try {
-            final Json jsonDocument = Json.read(jsonString);
-            if (jsonDocument == null || jsonString.length() < 1) {
+            return toBundle(new JSONObject(jsonString), ioPathConstructor);
+        } catch (JSONException | UnsupportedOperationException e) {
+            // see if the user provided a collection instead of a single bundle, and if so, present it as
+            // a Bundle as long as it only contains one BundleResource
+            try {
+                final List<Bundle> bundles = toBundleList(jsonString, ioPathConstructor);
+                if (bundles.size() > 1) {
+                    throw new IllegalArgumentException(
+                        String.format("A JSON string with more than one bundle was provided but only a single bundle is allowed in this context (%s)",
+                                e.getMessage()));
+                }
+                return bundles.get(0);
+            } catch (JSONException | UnsupportedOperationException e2) {
                 throw new IllegalArgumentException(
-                        String.format("JSON file parsing failed %s", jsonString));
+                        String.format("The JSON can be interpreted neither as an individual bundle (%s) nor as a bundle collection (%s)",
+                                e.getMessage(),
+                                e2.getMessage()),
+                        e);
             }
+        }
+    }
 
-            // validate the schema name
-            final String schemaName = getPropertyAsString(JSON_PROPERTY_SCHEMA_NAME, jsonDocument);
+    /**
+     * Create a List<Bundle> from a jsonString, using a custom class that implements {@link IOPath} for all
+     * resources.
+     * @param jsonString the json string must conform to the bundle schema, and may contain an array or single object
+     * @param ioPathConstructor constructor to use to create the backing IOPath for all resources
+     * @return List<Bundle>
+     * @param <T> IOPath-derived class to use for IOPathResources
+     */
+    public static <T extends IOPath> List<Bundle> toBundleList(
+            final String jsonString,
+            final Function<String, T> ioPathConstructor) {
+        ValidationUtils.nonEmpty(jsonString, "json bundle string");
+        ValidationUtils.nonNull(ioPathConstructor, "IOPath-derived class constructor");
+
+        final List<Bundle> bundles = new ArrayList<>();
+        try {
+            final JSONArray jsonArray = new JSONArray(jsonString);
+            jsonArray.forEach(element -> {
+                if (! (element instanceof JSONObject jsonObject)) {
+                    throw new IllegalArgumentException(
+                            String.format("Bundle collections may contain only Bundle objects, found %s",
+                                    element.toString()));
+                }
+                bundles.add(toBundle(jsonObject, ioPathConstructor));
+            });
+        } catch (JSONException | UnsupportedOperationException e) {
+            // see if the user provided a single bundle instead of a collection, if so, wrap it up as a collection
+            try {
+                bundles.add(toBundle(new JSONObject(jsonString), ioPathConstructor));
+            } catch (JSONException | UnsupportedOperationException e2) {
+                throw new IllegalArgumentException(
+                        String.format("JSON can be interpreted neither as an individual bundle (%s) nor as a bundle collection (%s)",
+                        e2.getMessage(),
+                        e.getMessage()),
+                        e);
+            }
+        }
+        if (bundles.isEmpty()) {
+            throw new IllegalArgumentException("JSON bundle collection must contain at least one bundle");
+        }
+        return bundles;
+    }
+
+    /**
+     * Create a List<Bundle> from a jsonString.
+     *
+     * @param jsonString a JSON strings that conform to the bundle schema; may be an array or single object
+     * @return a {@link List<Bundle>} created from a Collection of jsonStrings
+     */
+    public static List<Bundle> toBundleList(final String jsonString) {
+        return toBundleList(jsonString, HtsPath::new);
+    }
+
+    private static <T extends IOPath> Bundle toBundle(
+            final JSONObject jsonObject, // must be a single Bundle object
+            final Function<String, T> ioPathConstructor) {
+        try {
+            // validate the schema name and version
+            final JSONObject schemaMap = jsonObject.getJSONObject(JSON_PROPERTY_SCHEMA);
+            if (schemaMap == null) {
+                throw new IllegalArgumentException("JSON bundle is missing the required schema property");
+            }
+            final String schemaName = getRequiredPropertyAsString(schemaMap, JSON_PROPERTY_SCHEMA_NAME);
             if (!schemaName.equals(JSON_SCHEMA_NAME)) {
                 throw new IllegalArgumentException(
                         String.format("Expected bundle schema name %s but found %s", JSON_SCHEMA_NAME, schemaName));
             }
-
-            // validate the schema version
-            final String schemaVersion = getPropertyAsString(JSON_PROPERTY_SCHEMA_VERSION, jsonDocument);
+            final String schemaVersion = getRequiredPropertyAsString(schemaMap, JSON_PROPERTY_SCHEMA_VERSION);
             if (!schemaVersion.equals(JSON_SCHEMA_VERSION)) {
                 throw new IllegalArgumentException(String.format("Expected bundle schema version %s but found %s",
                         JSON_SCHEMA_VERSION, schemaVersion));
             }
-            primaryContentType = getPropertyAsString(JSON_PROPERTY_PRIMARY, jsonDocument);
 
-            jsonDocument.asJsonMap().forEach((String contentType, Json jsonDoc) -> {
-                if (!TOP_LEVEL_PROPERTIES.contains(contentType)) {
-                    final Json format = jsonDoc.at(JSON_PROPERTY_FORMAT);
-                    final IOPathResource ioPathResource = new IOPathResource(
-                            ioPathConstructor.apply(getPropertyAsString(JSON_PROPERTY_PATH, jsonDoc)),
-                            contentType,
-                            format == null ?
-                                    null :
-                                    getPropertyAsString(JSON_PROPERTY_FORMAT, jsonDoc));
-                    resources.add(ioPathResource);
+            final String primaryContentType = getRequiredPropertyAsString(jsonObject, JSON_PROPERTY_PRIMARY);
+            final Collection<BundleResource> bundleResources = toBundleResources(jsonObject, ioPathConstructor);
+            return new Bundle(primaryContentType, bundleResources);
+        } catch (JSONException | UnsupportedOperationException e) {
+            throw new IllegalArgumentException(e);
+        }
+    }
+    private static <T extends IOPath> IOPathResource toBundleResource(
+            final String contentType,
+            final JSONObject jsonObject,
+            final Function<String, T> ioPathConstructor) {
+        final String format = jsonObject.optString(JSON_PROPERTY_FORMAT, null);
+        return new IOPathResource(
+                ioPathConstructor.apply(getRequiredPropertyAsString(jsonObject, JSON_PROPERTY_PATH)),
+                contentType,
+                format);
+    }
+    private static <T extends IOPath> Collection<BundleResource> toBundleResources(
+            final JSONObject jsonResources,
+            final Function<String, T> ioPathConstructor) {
+
+        final List<BundleResource> bundleResources = new ArrayList<>(); // default capacity of 10 seems right
+        jsonResources.keySet().forEach(key -> {
+            if (!TOP_LEVEL_PROPERTIES.contains(key)) {
+                if (jsonResources.get(key) instanceof JSONObject resourceObject) {
+                    bundleResources.add(toBundleResource(key, resourceObject, ioPathConstructor));
+                } else {
+                    throw new IllegalArgumentException(
+                            String.format("Bundle resources may contain only BundleResource objects, found %s", key));
                 }
-            });
-            if (resources.isEmpty()) {
-                LOG.warn("Empty resource bundle found: ", jsonString);
             }
-        } catch (Json.MalformedJsonException | java.lang.UnsupportedOperationException e) {
-            throw new IllegalArgumentException(e);
-        }
-
-        return new Bundle(primaryContentType, resources);
+        });
+        return bundleResources;
     }
 
-    // Simple pretty-printer to produce indented JSON strings from a Json document. Note that
-    // this is not generalized and will only work on Json documents produced by BundleJSON::toJSON.
-    private static String prettyPrintJSON(final Json jsonDocument) {
-        final StringBuilder sb = new StringBuilder();
-        final String TOP_LEVEL_PROPERTY_FORMAT = "  \"%s\":\"%s\"";
-
-        try {
-            sb.append("{\n");
-
-            // schema name
-            final String schemaName = getPropertyAsString(JSON_PROPERTY_SCHEMA_NAME, jsonDocument);
-            sb.append(String.format(TOP_LEVEL_PROPERTY_FORMAT, JSON_PROPERTY_SCHEMA_NAME, schemaName));
-            sb.append(",\n");
-
-            // schema version
-            final String schemaVersion = getPropertyAsString(JSON_PROPERTY_SCHEMA_VERSION, jsonDocument);
-            sb.append(String.format(TOP_LEVEL_PROPERTY_FORMAT, JSON_PROPERTY_SCHEMA_VERSION, schemaVersion));
-            sb.append(",\n");
-
-            // primary
-            final String primary = getPropertyAsString(JSON_PROPERTY_PRIMARY, jsonDocument);
-            sb.append(String.format(TOP_LEVEL_PROPERTY_FORMAT, JSON_PROPERTY_PRIMARY, primary));
-            sb.append(",\n");
-
-            final List<String> formattedResources = new ArrayList<>();
-            jsonDocument.asJsonMap().forEach((String contentType, Json jsonDoc) -> {
-                if (!TOP_LEVEL_PROPERTIES.contains(contentType)) {
-                    final Json format = jsonDoc.at(JSON_PROPERTY_FORMAT);
-                    final StringBuilder resSB = new StringBuilder();
-                    if (format != null) {
-                        resSB.append(String.format("{\"%s\":\"%s\",\"%s\":\"%s\"}",
-                                JSON_PROPERTY_PATH,
-                                getPropertyAsString(JSON_PROPERTY_PATH, jsonDoc),
-                                JSON_PROPERTY_FORMAT,
-                                getPropertyAsString(JSON_PROPERTY_FORMAT, jsonDoc)));
-                    } else {
-                        resSB.append(String.format("{\"%s\":\"%s\"}",
-                                JSON_PROPERTY_PATH,
-                                getPropertyAsString(JSON_PROPERTY_PATH, jsonDoc)));
-                    }
-                    formattedResources.add(String.format("  \"%s\":%s", contentType, resSB.toString()));
-                }
-            });
-            sb.append(formattedResources.stream().collect(Collectors.joining(",\n", "", "\n")));
-            sb.append("}\n");
-        } catch (Json.MalformedJsonException | java.lang.UnsupportedOperationException e) {
-            throw new IllegalArgumentException(e);
-        }
-
-        return sb.toString();
-    }
-
-    // return the value of propertyName from jsonDocument as a String value
-    private static String getPropertyAsString(final String propertyName, final Json jsonDocument) {
-        final Json propertyValue = jsonDocument.at(propertyName);
+    private static String getRequiredPropertyAsString(final JSONObject jsonDocument, final String propertyName) {
+        final String propertyValue = jsonDocument.optString(propertyName, null);
         if (propertyValue == null) {
             throw new IllegalArgumentException(
                     String.format("JSON bundle is missing the required property %s (%s)",
                             propertyName,
-                            jsonDocument.toString()));
-        } else if (!propertyValue.isString()) {
-            throw new IllegalArgumentException(
-                    String.format("Expected string value for bundle property %s but found %s",
-                            propertyName,
-                            propertyValue.toString()));
+                            jsonDocument));
         }
-        return propertyValue.asString();
-    }
 
+        return propertyValue;
+    }
 }

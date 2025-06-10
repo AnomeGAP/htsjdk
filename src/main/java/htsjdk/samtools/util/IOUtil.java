@@ -582,6 +582,18 @@ public class IOUtil {
         for (final File file : files) assertFileIsWritable(file);
     }
 
+
+    /**
+     * In some filesystems (e.g. google cloud) it may not make sense to check writability.
+     * This method only checks writability when it's (i.e. for now when the path points to a file
+     * in the local filesystem)
+     */
+    public static void assertFileIsWritable(final Path path){ // tsato: perhaps the input type should be IOPath
+        if (path.toUri().getScheme().equals("file")){
+            IOUtil.assertFileIsWritable(path.toFile());
+        }
+    }
+
     /**
      * Checks that a directory is non-null, extent, writable and a directory
      * otherwise a runtime exception is thrown.
@@ -867,7 +879,8 @@ public class IOUtil {
     }
 
     public static OutputStream openFileForMd5CalculatingWriting(final Path file) {
-        return new Md5CalculatingOutputStream(IOUtil.openFileForWriting(file), file.resolve(".md5"));
+        final Path digestFile = file.resolveSibling(file.getFileName() + FileExtensions.MD5);
+        return new Md5CalculatingOutputStream(IOUtil.openFileForWriting(file), digestFile);
     }
 
     /**
@@ -1169,7 +1182,7 @@ public class IOUtil {
 
         while (!stack.empty()) {
             final Path p = stack.pop();
-            final String name = p.toString();
+            final String name = p.getFileName().toString();
             boolean matched = false;
 
             for (final String ext : extensions) {

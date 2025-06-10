@@ -26,7 +26,7 @@ package htsjdk.samtools.cram.structure;
 
 import htsjdk.samtools.cram.CRAMException;
 import htsjdk.samtools.cram.compression.ExternalCompressor;
-import htsjdk.samtools.cram.compression.rans.RANS;
+import htsjdk.samtools.cram.compression.rans.rans4x8.RANS4x8Params;
 import htsjdk.samtools.cram.encoding.CRAMEncoding;
 import htsjdk.samtools.cram.encoding.external.ByteArrayStopEncoding;
 import htsjdk.samtools.cram.encoding.external.ExternalByteEncoding;
@@ -38,10 +38,20 @@ import htsjdk.samtools.cram.structure.block.Block;
 import htsjdk.samtools.cram.structure.block.BlockCompressionMethod;
 import htsjdk.utils.ValidationUtils;
 
-import java.io.*;
+import java.io.ByteArrayOutputStream;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
 import java.nio.ByteBuffer;
-import java.util.*;
 import htsjdk.samtools.util.Log;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collections;
+import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.TreeMap;
 
 /**
  * Maintains a map of DataSeries to EncodingDescriptor, and a second map that contains the compressor to use
@@ -208,13 +218,13 @@ public class CompressionHeaderEncodingMap {
      * @param outputStream stream to compress
      * @return Block containing the compressed contends of the stream
      */
-    public Block createCompressedBlockForStream(final Integer contentId, final ByteArrayOutputStream outputStream) {
+    public Block createCompressedBlockForStream(final CRAMCodecModelContext contextModel, final Integer contentId, final ByteArrayOutputStream outputStream) {
         final ExternalCompressor compressor = externalCompressors.get(contentId);
         final byte[] rawContent = outputStream.toByteArray();
         return Block.createExternalBlock(
                 compressor.getMethod(),
                 contentId,
-                compressor.compress(rawContent),
+                compressor.compress(rawContent, contextModel),
                 rawContent.length);
     }
 
@@ -274,17 +284,17 @@ public class CompressionHeaderEncodingMap {
         final ExternalCompressor gzip = compressorCache.getCompressorForMethod(
                 BlockCompressionMethod.GZIP,
                 encodingStrategy.getGZIPCompressionLevel());
-        final int gzipLen = gzip.compress(data).length;
+        final int gzipLen = gzip.compress(data, null).length;
 
         final ExternalCompressor rans0 = compressorCache.getCompressorForMethod(
                 BlockCompressionMethod.RANS,
-                RANS.ORDER.ZERO.ordinal());
-        final int rans0Len = rans0.compress(data).length;
+                RANS4x8Params.ORDER.ZERO.ordinal());
+        final int rans0Len = rans0.compress(data,null).length;
 
         final ExternalCompressor rans1 = compressorCache.getCompressorForMethod(
                 BlockCompressionMethod.RANS,
-                RANS.ORDER.ONE.ordinal());
-        final int rans1Len = rans1.compress(data).length;
+                RANS4x8Params.ORDER.ONE.ordinal());
+        final int rans1Len = rans1.compress(data, null).length;
 
         // find the best of general purpose codecs:
         final int minLen = Math.min(gzipLen, Math.min(rans0Len, rans1Len));
@@ -387,14 +397,14 @@ public class CompressionHeaderEncodingMap {
     private void putExternalRansOrderOneEncoding(final DataSeries dataSeries) {
         putExternalEncoding(
                 dataSeries,
-                compressorCache.getCompressorForMethod(BlockCompressionMethod.RANS, RANS.ORDER.ONE.ordinal()));
+                compressorCache.getCompressorForMethod(BlockCompressionMethod.RANS, RANS4x8Params.ORDER.ONE.ordinal()));
     }
 
     // add an external encoding appropriate for the dataSeries value type, with a RANS order 0 compressor
     private void putExternalRansOrderZeroEncoding(final DataSeries dataSeries) {
         putExternalEncoding(
                 dataSeries,
-                compressorCache.getCompressorForMethod(BlockCompressionMethod.RANS, RANS.ORDER.ZERO.ordinal()));
+                compressorCache.getCompressorForMethod(BlockCompressionMethod.RANS, RANS4x8Params.ORDER.ZERO.ordinal()));
     }
 
     @Override

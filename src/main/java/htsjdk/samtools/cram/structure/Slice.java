@@ -42,7 +42,6 @@ import htsjdk.samtools.util.SequenceUtil;
 import htsjdk.utils.ValidationUtils;
 
 import java.io.*;
-import java.lang.reflect.Array;
 import java.math.BigInteger;
 import java.util.*;
 import java.util.stream.Collectors;
@@ -56,6 +55,8 @@ import java.util.stream.Collectors;
  * on the corresponding reference contig.
  */
 public class Slice {
+    private final CRAMVersion cramVersion;
+
     private static final Log log = Log.getInstance(Slice.class);
     private static final int MD5_BYTE_SIZE = 16;
     // for indexing purposes
@@ -105,6 +106,7 @@ public class Slice {
     private int byteSizeOfSliceBlocks = UNINITIALIZED_INDEXING_PARAMETER;
     private int landmarkIndex = UNINITIALIZED_INDEXING_PARAMETER;
 
+    private final CRAMCodecModelContext contextModel = new CRAMCodecModelContext();
     /**
      * Create a slice by reading a serialized Slice from an input stream.
      *
@@ -118,6 +120,7 @@ public class Slice {
             final CompressionHeader compressionHeader,
             final InputStream inputStream,
             final long containerByteOffset) {
+        this.cramVersion = cramVersion;
         sliceHeaderBlock = Block.read(cramVersion, inputStream);
         if (sliceHeaderBlock.getContentType() != BlockContentType.MAPPED_SLICE) {
             throw new RuntimeException("Slice Header Block expected, found:  " + sliceHeaderBlock.getContentType().name());
@@ -194,6 +197,7 @@ public class Slice {
             final long containerByteOffset,
             final long globalRecordCounter) {
         ValidationUtils.validateArg(globalRecordCounter >= 0, "record counter must be >= 0");
+        this.cramVersion = CramVersions.DEFAULT_CRAM_VERSION;
         this.compressionHeader = compressionHeader;
         this.byteOffsetOfContainer = containerByteOffset;
 
@@ -241,11 +245,13 @@ public class Slice {
         this.globalRecordCounter = globalRecordCounter;
 
         final CramRecordWriter writer = new CramRecordWriter(this);
-        sliceBlocks = writer.writeToSliceBlocks(records, alignmentContext.getAlignmentStart());
+        sliceBlocks = writer.writeToSliceBlocks(contextModel, records, alignmentContext.getAlignmentStart());
 
         // we can't calculate the number of blocks until after the record writer has written everything out
         nSliceBlocks = caclulateNumberOfBlocks();
     }
+
+    public CRAMVersion getCramVersion() { return cramVersion; }
 
     // May be null
     public Block getSliceHeaderBlock() { return sliceHeaderBlock; }
@@ -732,41 +738,6 @@ public class Slice {
             // use offset 0, which is correct given the assumption that we are ALWAYS using
             // a region that has bases that reflect the span of the alignment context
             referenceMD5 = SequenceUtil.calculateMD5(referenceBases, 0, span);
-        }
-    }
-
-    /**
-     * Hijacking attributes-related methods from SAMRecord:
-     */
-
-    /**
-     * Set a value for the tag.
-     * @param tag tag ID as a short integer as returned by {@link SAMTag#makeBinaryTag(String)}
-     * @param value tag value
-     */
-    public void setAttribute(final String tag, final Object value) {
-        if (value != null && value.getClass().isArray() && Array.getLength(value) == 0) {
-            throw new IllegalArgumentException("Empty value passed for tag " + tag);
-        }
-        setAttribute(SAMTag.makeBinaryTag(tag), value);
-    }
-
-    void setAttribute(final short tag, final Object value) {
-        setAttribute(tag, value, false);
-    }
-
-    void setAttribute(final short tag, final Object value, final boolean isUnsignedArray) {
-        if (value == null) {
-            if (this.sliceTags != null) this.sliceTags = this.sliceTags.remove(tag);
-        } else {
-            final SAMBinaryTagAndValue tmp;
-            if (!isUnsignedArray) {
-                tmp = new SAMBinaryTagAndValue(tag, value);
-            } else {
-                tmp = new SAMBinaryTagAndUnsignedArrayValue(tag, value);
-            }
-            if (this.sliceTags == null) this.sliceTags = tmp;
-            else this.sliceTags = this.sliceTags.insert(tmp);
         }
     }
 

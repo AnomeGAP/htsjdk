@@ -1,5 +1,8 @@
 package htsjdk.beta.codecs.variants.vcf;
 
+import com.google.common.jimfs.Configuration;
+import com.google.common.jimfs.Jimfs;
+import com.google.common.jimfs.SystemJimfsFileSystemProvider;
 import htsjdk.HtsjdkTest;
 import htsjdk.beta.codecs.variants.vcf.vcfv3_2.VCFCodecV3_2;
 import htsjdk.beta.codecs.variants.vcf.vcfv3_3.VCFCodecV3_3;
@@ -26,6 +29,7 @@ import htsjdk.beta.plugin.variants.VariantsDecoder;
 import htsjdk.beta.plugin.variants.VariantsEncoder;
 import htsjdk.beta.plugin.variants.VariantsFormats;
 import htsjdk.samtools.util.IOUtil;
+import htsjdk.tribble.TestUtils;
 import htsjdk.variant.variantcontext.VariantContext;
 import htsjdk.variant.vcf.VCFHeader;
 import org.testng.Assert;
@@ -36,6 +40,9 @@ import java.io.BufferedInputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.nio.file.FileSystem;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.function.Function;
@@ -60,11 +67,26 @@ public class HtsVCFCodecTest extends HtsjdkTest {
         };
     }
 
+    @Test
+    public void testRoundTripNio() throws IOException {
+        try(FileSystem fs = Jimfs.newFileSystem("test", Configuration.unix())){
+            final IOPath outputPath = IOUtils.createTempPath("roundTripVCFThroughPath", ".vcf");
+            Path tribbleFileInJimfs = TestUtils.getTribbleFileInJimfs(TEST_VCF_WITH_INDEX.getRawInputString(), TEST_VCF_INDEX.getRawInputString(), fs);
+            HtsPath vcf = new HtsPath(tribbleFileInJimfs.toUri().toString());
+            checkCodecAndReadWriteVcf( vcf , VCFCodecV4_0.VCF_V40_VERSION , outputPath);
+        }
+    }
+    
     @Test(dataProvider = "vcfReadWriteTests")
     public void testRoundTripVCFThroughPath(final IOPath inputPath, final HtsVersion expectedCodecVersion) {
+        final IOPath outputPath = IOUtils.createTempPath("roundTripVCFThroughPath", ".vcf");
+
+        checkCodecAndReadWriteVcf(inputPath, expectedCodecVersion, outputPath);
+    }
+
+    private void checkCodecAndReadWriteVcf(IOPath inputPath, HtsVersion expectedCodecVersion, IOPath outputPath) {
         // some test files require "AllowMissingFields" options for writing
         final VariantsEncoderOptions variantsEncoderOptions = new VariantsEncoderOptions().setAllowFieldsMissingFromHeader(true);
-        final IOPath outputPath = IOUtils.createTempPath("roundTripVCFThroughPath", ".vcf");
 
         try (final VariantsDecoder variantsDecoder = HtsDefaultRegistry.getVariantsResolver().getVariantsDecoder(inputPath);
              final VariantsEncoder variantsEncoder = HtsDefaultRegistry.getVariantsResolver().getVariantsEncoder(
@@ -89,11 +111,11 @@ public class HtsVCFCodecTest extends HtsjdkTest {
         try (final VariantsDecoder variantsDecoder = HtsDefaultRegistry.getVariantsResolver().getVariantsDecoder(inputPath);
              final OutputStream os = outputPath.getOutputStream()) {
             final Bundle outputBundle = new Bundle(
-                    BundleResourceType.VARIANT_CONTEXTS,
+                    BundleResourceType.CT_VARIANT_CONTEXTS,
                     Collections.singletonList(new OutputStreamResource(
                             os,
                             OUTPUT_DISPLAY_NAME,
-                            BundleResourceType.VARIANT_CONTEXTS)));
+                            BundleResourceType.CT_VARIANT_CONTEXTS)));
              try (final VariantsEncoder variantsEncoder = HtsDefaultRegistry.getVariantsResolver().getVariantsEncoder(
                      outputBundle,
                      variantsEncoderOptions)) {
@@ -150,8 +172,8 @@ public class HtsVCFCodecTest extends HtsjdkTest {
         // use a vcf that is known to have an on-disk companion index to ensure that attempts to make
         // index queries are rejected if the index is not explicitly included in the input bundle
         final Bundle variantsBundle = new BundleBuilder()
-                .addPrimary(new IOPathResource(TEST_VCF_WITH_INDEX, BundleResourceType.VARIANT_CONTEXTS))
-                .addSecondary(new IOPathResource(TEST_VCF_INDEX, BundleResourceType.VARIANTS_INDEX))
+                .addPrimary(new IOPathResource(TEST_VCF_WITH_INDEX, BundleResourceType.CT_VARIANT_CONTEXTS))
+                .addSecondary(new IOPathResource(TEST_VCF_INDEX, BundleResourceType.CT_VARIANTS_INDEX))
                 .build();
 
         try (final VariantsDecoder variantsDecoder =
@@ -185,8 +207,8 @@ public class HtsVCFCodecTest extends HtsjdkTest {
     @Test(dataProvider="unsupportedQueryCases", expectedExceptions = HtsjdkUnsupportedOperationException.class)
     public void testRejectUnsupportedQueries(final Function<VariantsDecoder, ?> queryFunction) {
         final Bundle variantsBundle = new BundleBuilder()
-                .addPrimary(new IOPathResource(TEST_VCF_WITH_INDEX, BundleResourceType.VARIANT_CONTEXTS))
-                .addSecondary(new IOPathResource(TEST_VCF_INDEX, BundleResourceType.VARIANTS_INDEX))
+                .addPrimary(new IOPathResource(TEST_VCF_WITH_INDEX, BundleResourceType.CT_VARIANT_CONTEXTS))
+                .addSecondary(new IOPathResource(TEST_VCF_INDEX, BundleResourceType.CT_VARIANTS_INDEX))
                 .build();
 
         try (final VariantsDecoder variantsDecoder =
@@ -202,9 +224,9 @@ public class HtsVCFCodecTest extends HtsjdkTest {
         // use a bam that is known to have an on-disk companion index to ensure that attempts to make
         // index queries are rejected if the index is not explicitly included in the input bundle
         final Bundle variantsBundle = new BundleBuilder()
-                .addPrimary(new IOPathResource(TEST_VCF_WITH_INDEX, BundleResourceType.VARIANT_CONTEXTS))
+                .addPrimary(new IOPathResource(TEST_VCF_WITH_INDEX, BundleResourceType.CT_VARIANT_CONTEXTS))
                 .build();
-        Assert.assertFalse(variantsBundle.get(BundleResourceType.VARIANTS_INDEX).isPresent());
+        Assert.assertFalse(variantsBundle.get(BundleResourceType.CT_VARIANTS_INDEX).isPresent());
 
         try (final VariantsDecoder variantsDecoder =
                      HtsDefaultRegistry.getVariantsResolver().getVariantsDecoder(variantsBundle)) {
@@ -221,7 +243,7 @@ public class HtsVCFCodecTest extends HtsjdkTest {
     public void testGetDecoderForFormatAndVersion() {
         final IOPath tempOutputPath = IOPathUtils.createTempPath("testGetDecoderForFormatAndVersion", ".vcf");
         final Bundle outputBundle = new BundleBuilder()
-                .addPrimary(new IOPathResource(tempOutputPath, BundleResourceType.VARIANT_CONTEXTS))
+                .addPrimary(new IOPathResource(tempOutputPath, BundleResourceType.CT_VARIANT_CONTEXTS))
                 .build();
         try (final VariantsEncoder variantsEncoder = HtsDefaultRegistry.getVariantsResolver().getVariantsEncoder(
                 outputBundle,

@@ -24,12 +24,17 @@
 
 package htsjdk.samtools.reference;
 
+import com.google.common.jimfs.Configuration;
+import com.google.common.jimfs.Jimfs;
 import htsjdk.HtsjdkTest;
+import htsjdk.io.HtsPath;
+import htsjdk.io.IOPath;
 import htsjdk.samtools.SAMException;
 import htsjdk.samtools.seekablestream.SeekableFileStream;
 import htsjdk.samtools.util.CloserUtil;
 import htsjdk.samtools.util.GZIIndex;
 import htsjdk.samtools.util.IOUtil;
+import htsjdk.samtools.util.Interval;
 import htsjdk.samtools.util.RuntimeIOException;
 import htsjdk.samtools.util.StringUtil;
 import org.testng.Assert;
@@ -40,6 +45,7 @@ import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileNotFoundException;
 import java.io.IOException;
+import java.nio.file.FileSystem;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
@@ -138,6 +144,21 @@ public class AbstractIndexedFastaSequenceFileTest extends HtsjdkTest {
         System.err.printf("testFirstSequence runtime: %dms%n", (endTime - startTime)) ;
     }
 
+    @Test(dataProvider="homosapiens")
+    public void testSubsequenceAtLocatable(AbstractIndexedFastaSequenceFile sequenceFile) {
+        long startTime = System.currentTimeMillis();
+        ReferenceSequence sequence = sequenceFile.getSubsequenceAt(new Interval("chrM",1,firstBasesOfChrM.length()));
+        long endTime = System.currentTimeMillis();
+
+        Assert.assertEquals(sequence.getName(),"chrM","Sequence contig is not correct");
+        Assert.assertEquals(sequence.getContigIndex(),0,"Sequence contig index is not correct");
+        Assert.assertEquals(StringUtil.bytesToString(sequence.getBases()),firstBasesOfChrM,"First n bases of chrM are incorrect");
+
+        CloserUtil.close(sequenceFile);
+
+        System.err.printf("testSubsequenceAtLocatable runtime: %dms%n", (endTime - startTime)) ;
+    }
+    
     @Test(dataProvider="homosapiens")
     public void testFirstSequenceExtended(AbstractIndexedFastaSequenceFile sequenceFile) {
         long startTime = System.currentTimeMillis();
@@ -369,4 +390,84 @@ public class AbstractIndexedFastaSequenceFileTest extends HtsjdkTest {
                     withFilesAdjacent.getSubsequenceAt("chrM", 100, 1000).getBases());
         }
     }
+
+    //test for IndexedFastaSequenceFile (non-gzipped)
+    @Test
+    public void testIndexedFastaSequenceFileFromNio() throws IOException {
+        final String dataDir = "src/test/resources/htsjdk/samtools/reference";
+        final IOPath fastaFile = new HtsPath(new File(dataDir, "Homo_sapiens_assembly18.trimmed.fasta").getAbsolutePath());
+        final IOPath indexFile = new HtsPath(new File(dataDir, "Homo_sapiens_assembly18.trimmed.fasta.fai").getAbsolutePath());;
+
+        // move everything to a jimfs NIO file system so that each file is in a separate directory so it is in
+        // a directory by itself, so we can catch any downstream code that makes assumptions that the index
+        // files are siblings of the fasta in the same directory
+        try (final FileSystem jimfs = Jimfs.newFileSystem(Configuration.unix())) {
+
+            // move the fasta
+            final Path fastaDir = jimfs.getPath("fastaDir");
+            final Path nioFastaDir = Files.createDirectory(fastaDir);
+            Assert.assertEquals(nioFastaDir, fastaDir);
+            final IOPath remoteFasta = copyToRemotePath(fastaFile, nioFastaDir);
+
+            // move the index file into a separate dir
+            final Path indexDir = jimfs.getPath("indexDir");
+            final Path nioIndexDir = Files.createDirectory(indexDir);
+            Assert.assertEquals(nioIndexDir, indexDir);
+            final IOPath remoteIndex = copyToRemotePath(indexFile, nioIndexDir);
+
+            final FastaSequenceIndex fsi = new FastaSequenceIndex(remoteIndex.toPath());
+            final IndexedFastaSequenceFile ifsf = new IndexedFastaSequenceFile(remoteFasta, null, fsi);
+            final ReferenceSequence rs = ifsf.getSubsequenceAt("chrM", 4, 10);
+            Assert.assertEquals(rs.getBaseString(), "CACAGGT");
+        }
+    }
+
+    private static IOPath copyToRemotePath(IOPath file, Path remoteDir) throws IOException {
+        return new HtsPath(
+                Files.copy(
+                        file.toPath(),
+                        remoteDir.resolve(file.getBaseName().get() + file.getExtension().get())).toUri().toString());
+    }
+
+    @Test
+    public void testBlockCompressedIndexedFastaSequenceFileFromNio() throws IOException {
+        final String dataDir = "src/test/resources/htsjdk/samtools/reference";
+        final IOPath fastaFile = new HtsPath(new File(dataDir, "Homo_sapiens_assembly18.trimmed.fasta.gz").getAbsolutePath());
+        final IOPath indexFile = new HtsPath(new File(dataDir, "Homo_sapiens_assembly18.trimmed.fasta.fai").getAbsolutePath());;
+        final IOPath gziIndexFile = new HtsPath(new File(dataDir, "Homo_sapiens_assembly18.trimmed.fasta.gz.gzi").getAbsolutePath());;
+
+        // move everything to a jimfs NIO file system so that each file is in a separate directory so it is in
+        // a directory by iteself, so we can catch any downstream code that makes assumptions that the index
+        // files are siblings of the fasta in the same directory
+        try (final FileSystem jimfs = Jimfs.newFileSystem(Configuration.unix())) {
+
+            // move the fasta
+            final Path fastaDir = jimfs.getPath("fastaDir");
+            final Path nioFastaDir = Files.createDirectory(fastaDir);
+            Assert.assertEquals(nioFastaDir, fastaDir);
+            final IOPath remoteFasta = copyToRemotePath(fastaFile, nioFastaDir);
+
+            // move the index file into a completely separate dir
+            final Path indexDir = jimfs.getPath("indexDir");
+            final Path nioIndexDir = Files.createDirectory(indexDir);
+            Assert.assertEquals(nioIndexDir, indexDir);
+            final IOPath remoteIndex = copyToRemotePath(indexFile, nioFastaDir);
+
+            // move the optional gzi index ito yet another separate dir
+            final Path gziDir = jimfs.getPath("gziDir");
+            final Path nioGZIDir = Files.createDirectory(gziDir);
+            Assert.assertEquals(nioGZIDir, gziDir);
+            final IOPath remoteGZI = copyToRemotePath(gziIndexFile, nioGZIDir);
+
+            final FastaSequenceIndex fsi = new FastaSequenceIndex(remoteIndex.toPath());
+            final BlockCompressedIndexedFastaSequenceFile ifsf = new BlockCompressedIndexedFastaSequenceFile(
+                    remoteFasta,
+                    null,
+                    fsi,
+                    GZIIndex.loadIndex(remoteGZI.toPath()));
+            final ReferenceSequence rs = ifsf.getSubsequenceAt("chrM", 4, 10);
+            Assert.assertEquals(rs.getBaseString(), "CACAGGT");
+        }
+    }
+
 }

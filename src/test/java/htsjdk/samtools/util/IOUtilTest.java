@@ -35,7 +35,14 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.nio.file.spi.FileSystemProvider;
 
+import htsjdk.beta.exception.HtsjdkException;
+import htsjdk.samtools.BAMFileWriter;
+import htsjdk.samtools.BamFileIoUtils;
+import htsjdk.samtools.HtsjdkTestUtils;
 import htsjdk.samtools.SAMException;
+import htsjdk.samtools.SAMFileHeader;
+import htsjdk.samtools.SamReaderFactory;
+import org.apache.commons.compress.compressors.FileNameUtil;
 import org.testng.Assert;
 import org.testng.annotations.AfterClass;
 import org.testng.annotations.BeforeClass;
@@ -443,6 +450,7 @@ public class IOUtilTest extends HtsjdkTest {
 
     static final String level1 = "Level1.fofn";
     static final String level2 = "Level2.fofn";
+    static final String fofnHttpQueryParams = "FofnWithHttpQueryParams.fofn";
 
     @DataProvider
     public Object[][] fofnData() throws IOException {
@@ -453,11 +461,18 @@ public class IOUtilTest extends HtsjdkTest {
         Path fofnPath2 = inMemoryFileSystem.getPath(level2);
         Files.copy(TEST_DATA_DIR.resolve(level2), fofnPath2);
 
+        Path withHttpPath = inMemoryFileSystem.getPath(fofnHttpQueryParams);
+        Files.copy(TEST_DATA_DIR.resolve(fofnHttpQueryParams), withHttpPath);
+
         return new Object[][]{
                 {TEST_DATA_DIR + "/" + level1, new String[]{".vcf", ".vcf.gz"}, 2},
                 {TEST_DATA_DIR + "/" + level2, new String[]{".vcf", ".vcf.gz"}, 4},
                 {fofnPath1.toUri().toString(), new String[]{".vcf", ".vcf.gz"}, 2},
-                {fofnPath2.toUri().toString(), new String[]{".vcf", ".vcf.gz"}, 4}
+                {fofnPath2.toUri().toString(), new String[]{".vcf", ".vcf.gz"}, 4},
+                //test http links with query parameters are handled correctly
+                //test disabled until NIO http provider is integrated
+                //see https://github.com/samtools/htsjdk/issues/1689
+                //{withHttpPath.toUri().toString(), new String[]{".vcf", ".vcf.gz"}, 4}
         };
     }
 
@@ -795,6 +810,22 @@ public class IOUtilTest extends HtsjdkTest {
             // call twice to verify 'in.reset()' was called
             Assert.assertEquals(IOUtil.isGZIPInputStream(inputStream), isGzipped);
         }
+    }
+
+    @Test
+    public void testOpenFileForMd5CalculatingWriting() throws IOException {
+        Path output = Files.createTempFile("test", FileExtensions.BAM);
+
+        try (final OutputStream outputStream = IOUtil.openFileForMd5CalculatingWriting(output)){
+            // tsato: perhaps BamFileIoUtils is a better place for this test
+            BamFileIoUtils.blockCopyBamFile(IOUtil.toPath(HtsjdkTestUtils.NA12878_8000), outputStream, false, false);
+        } catch (IOException e) {
+            throw new HtsjdkException("Encountered an IO error", e);
+        }
+
+        final String md5FileName = output.getFileName() + FileExtensions.MD5;
+        Assert.assertTrue(md5FileName.endsWith(".bam.md5"));
+        Assert.assertTrue(Files.exists(output.resolveSibling(md5FileName)));
     }
 }
 
